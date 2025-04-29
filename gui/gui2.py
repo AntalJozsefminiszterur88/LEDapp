@@ -1,13 +1,23 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
-
+import geocoder
 import asyncio
 import json
 import os
-
-from config import COLORS, DAYS, CONFIG_FILE, LATITUDE, LONGITUDE, TIMEZONE
 from suntime import Sun
+
+from config import COLORS, DAYS, CONFIG_FILE, TIMEZONE
+
+def get_gps_location():
+    """GPS koordináták lekérése IP cím alapján"""
+    try:
+        g = geocoder.ip('me')
+        if g.latlng:
+            return g.latlng[0], g.latlng[1]
+        return (47.4979, 19.0402)  # Alapértelmezett Budapest
+    except Exception:
+        return (47.4979, 19.0402)  # Hiba esetén Budapest
 
 def setup_gui2(app):
     app.clear_window()
@@ -16,10 +26,24 @@ def setup_gui2(app):
     main_frame = tk.Frame(app.root, bg='#f4e7da')
     main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-    # Eszköz neve
+    # GPS adatok lekérése
+    latitude, longitude = get_gps_location()
+    sun = Sun(latitude, longitude)
+    now = datetime.now()
+
+    # Napkelte/naplemente számítás
+    try:
+        sunrise = sun.get_local_sunrise_time(now)
+        sunset = sun.get_local_sunset_time(now)
+    except Exception:
+        sunrise = now.replace(hour=6, minute=0)
+        sunset = now.replace(hour=18, minute=0)
+
+    # Eszköznév
     device_frame = tk.Frame(main_frame, bg='#f4e7da')
     device_frame.pack(fill=tk.X, pady=5)
-    tk.Label(device_frame, text=f"Csatlakoztatott eszköz: {app.selected_device[0]}", font=("Arial", 12), bg='#f4e7da').pack(side=tk.LEFT)
+    tk.Label(device_frame, text=f"Csatlakoztatott eszköz: {app.selected_device[0]}", 
+             font=("Arial", 12), bg='#f4e7da').pack(side=tk.LEFT)
 
     # DST kapcsoló
     dst_frame = tk.Frame(device_frame, bg='#f4e7da')
@@ -34,54 +58,69 @@ def setup_gui2(app):
     app.time_label.pack()
 
     # Napkelte és koordináták
-    sun = Sun(LATITUDE, LONGITUDE)
-    now = datetime.now()
-    sunrise = sun.get_local_sunrise_time(now)
-    sunset = sun.get_local_sunset_time(now)
-
     sun_frame = tk.Frame(main_frame, bg='#f4e7da')
     sun_frame.pack(fill=tk.X, pady=5)
-    tk.Label(sun_frame, text=f"Napkelte: {sunrise.strftime('%H:%M')} | Naplemente: {sunset.strftime('%H:%M')}",
+    tk.Label(sun_frame, 
+             text=f"Napkelte: {sunrise.strftime('%H:%M')} | Naplemente: {sunset.strftime('%H:%M')}",
              font=("Arial", 10), bg='#f4e7da').pack()
-    tk.Label(sun_frame, text=f"Koordináták: {LATITUDE}° É, {LONGITUDE}° K | Időzóna: {TIMEZONE}",
+    tk.Label(sun_frame, 
+             text=f"Koordináták: {latitude:.4f}° É, {longitude:.4f}° K | Időzóna: {TIMEZONE}",
              font=("Arial", 9), bg='#f4e7da').pack()
 
-    # Színes gombok
-    control_frame = tk.Frame(main_frame, bg='#f4e7da')
-    control_frame.pack(fill=tk.X, pady=15)
+    # Színes gombok 2x4 rácsban
+    control_container = tk.Frame(main_frame, bg='#f4e7da')
+    control_container.pack(pady=15)
+    
+    color_grid_frame = tk.Frame(control_container, bg='#f4e7da')
+    color_grid_frame.pack(side=tk.LEFT, padx=20)
+    
+    for row, colors in enumerate([COLORS[:4], COLORS[4:]]):
+        for col, (name, color, hex_code) in enumerate(colors):
+            btn = tk.Button(
+                color_grid_frame,
+                text=name,
+                bg=color,
+                font=("Arial", 12),
+                width=12,
+                height=2,
+                command=lambda h=hex_code: send_color_command(app, h)
+            )
+            btn.grid(row=row, column=col, padx=5, pady=5)
 
-    color_frame1 = tk.Frame(control_frame, bg='#f4e7da')
-    color_frame1.pack(side=tk.LEFT, padx=10)
-    for name, color, hex_code in COLORS[:4]:
-        btn = tk.Button(color_frame1, text=name, bg=color, font=("Arial", 12), width=12, height=2,
-                        command=lambda h=hex_code: send_color_command(app, h))
-        btn.pack(side=tk.LEFT, padx=5, pady=5)
+    # Kikapcsoló gombok
+    power_frame = tk.Frame(control_container, bg='#f4e7da')
+    power_frame.pack(side=tk.LEFT, padx=20)
 
-    color_frame2 = tk.Frame(control_frame, bg='#f4e7da')
-    color_frame2.pack(side=tk.LEFT, padx=10)
-    for name, color, hex_code in COLORS[4:]:
-        btn = tk.Button(color_frame2, text=name, bg=color, font=("Arial", 12), width=12, height=2,
-                        command=lambda h=hex_code: send_color_command(app, h))
-        btn.pack(side=tk.LEFT, padx=5, pady=5)
-
-    power_frame = tk.Frame(control_frame, bg='#f4e7da')
-    power_frame.pack(side=tk.RIGHT, padx=20)
-
-    app.power_off_btn = tk.Button(power_frame, text="Kikapcsol", font=("Arial", 12, "bold"),
-                                   width=12, height=2, bg="#ff6b6b", fg="white",
-                                   command=lambda: turn_off_led(app))
+    app.power_off_btn = tk.Button(
+        power_frame,
+        text="Kikapcsol",
+        font=("Arial", 12),
+        width=12,
+        height=2,
+        bg="#ff6b6b",
+        fg="white",
+        command=lambda: turn_off_led(app)
+    )
     app.power_off_btn.pack(pady=5)
 
-    app.power_on_btn = tk.Button(power_frame, text="Bekapcsol", font=("Arial", 12),
-                                  width=12, height=2, bg="#dddddd",
-                                  command=lambda: turn_on_led(app))
+    app.power_on_btn = tk.Button(
+        power_frame,
+        text="Bekapcsol",
+        font=("Arial", 12),
+        width=12,
+        height=2,
+        bg="#dddddd",
+        command=lambda: turn_on_led(app)
+    )
     app.power_on_btn.pack(pady=5)
 
     update_power_buttons(app)
 
-    # Táblázat + mentés
-    table_frame = tk.Frame(main_frame, bg='#f4e7da')
-    table_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+    # Táblázat középre rendezve
+    table_container = tk.Frame(main_frame, bg='#f4e7da')
+    table_container.pack(pady=10)
+    table_frame = tk.Frame(table_container, bg='#f4e7da')
+    table_frame.pack()
 
     headers = ["Nap", "Szín", "Felkapcsolás", "Lekapcsolás", "Napkelte", "+perc", "Naplemente", "+perc"]
     for i, header in enumerate(headers):
@@ -90,7 +129,6 @@ def setup_gui2(app):
     app.schedule_vars = []
     app.time_comboboxes = []
     for i, day in enumerate(DAYS):
-        # Név
         tk.Label(table_frame, text=day, font=("Arial", 10), bg='#f4e7da').grid(row=i+1, column=0, padx=5, pady=2)
 
         color_var = tk.StringVar(value=app.schedule[day]["color"])
@@ -134,21 +172,16 @@ def setup_gui2(app):
             "sunset_offset": sunset_offset
         })
 
+    # Mentés/vissza gombok
     button_frame = tk.Frame(main_frame, bg='#f4e7da')
     button_frame.pack(fill=tk.X, pady=10)
-
-    tk.Button(button_frame, text="Mentés", font=("Arial", 12),
-              command=lambda: save_schedule(app)).pack(side=tk.RIGHT, padx=10)
-
-    tk.Button(button_frame, text="Vissza", font=("Arial", 12),
-          command=lambda: app.load_gui1()).pack(side=tk.LEFT, padx=10)
+    tk.Button(button_frame, text="Mentés", font=("Arial", 12), command=lambda: save_schedule(app)).pack(side=tk.RIGHT, padx=10)
+    tk.Button(button_frame, text="Vissza", font=("Arial", 12), command=lambda: app.load_gui1()).pack(side=tk.LEFT, padx=10)
 
     update_time(app)
     check_schedule(app)
 
-
-# ---- Funkciók ----
-
+# ---- FUNKCIÓK ----
 def toggle_sun_time(app, var, idx):
     combo = app.time_comboboxes[idx]
     if var.get():
@@ -156,7 +189,6 @@ def toggle_sun_time(app, var, idx):
         combo.set('')
     else:
         combo.configure(state='readonly')
-
 
 def update_time(app):
     if not hasattr(app, 'time_label'):
@@ -167,7 +199,8 @@ def update_time(app):
         app.time_label.config(text=f"{now.strftime('%Y.%m.%d')} {magyar_nap} {now.strftime('%H:%M:%S')}")
         app.update_time_id = app.root.after(1000, lambda: update_time(app))
     except tk.TclError:
-        pass  # GUI már bezárt vagy törölve lett
+        pass
+
 def update_power_buttons(app):
     if app.is_led_on:
         app.power_off_btn.config(state=tk.NORMAL, bg="#ff6b6b", fg="white")
@@ -176,7 +209,6 @@ def update_power_buttons(app):
         app.power_off_btn.config(state=tk.DISABLED, bg="#dddddd")
         app.power_on_btn.config(state=tk.NORMAL, bg="#4CAF50", fg="white")
 
-
 def send_color_command(app, hex_code):
     app.last_activity = datetime.now()
     app.last_color_hex = hex_code
@@ -184,19 +216,16 @@ def send_color_command(app, hex_code):
     update_power_buttons(app)
     asyncio.run_coroutine_threadsafe(app.ble.send_command(hex_code), app.loop)
 
-
 def turn_off_led(app):
     app.is_led_on = False
     update_power_buttons(app)
     asyncio.run_coroutine_threadsafe(app.ble.send_command("7e00050300000000ef"), app.loop)
-
 
 def turn_on_led(app):
     if app.last_color_hex:
         app.is_led_on = True
         update_power_buttons(app)
         asyncio.run_coroutine_threadsafe(app.ble.send_command(app.last_color_hex), app.loop)
-
 
 def save_schedule(app):
     try:
@@ -220,7 +249,6 @@ def save_schedule(app):
     except Exception as e:
         messagebox.showerror("Hiba", f"Mentési hiba: {e}")
 
-
 def check_schedule(app):
     now = datetime.now()
     today = DAYS[now.weekday()]
@@ -229,7 +257,8 @@ def check_schedule(app):
     if not schedule:
         return
 
-    sun = Sun(LATITUDE, LONGITUDE)
+    latitude, longitude = get_gps_location()
+    sun = Sun(latitude, longitude)
     sunrise = sun.get_local_sunrise_time(now)
     sunset = sun.get_local_sunset_time(now)
 
